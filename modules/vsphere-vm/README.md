@@ -1,166 +1,351 @@
-# Terraform vSphere VM Module for Cluster-Based Tenancy
+# Terraform vSphere VM Module with Infoblox IPAM Integration
 
-This module enables deployment of virtual machines in a vSphere environment with tenant-specific clusters. It automatically selects appropriate datastores and networks based on the tenant cluster and supports multiple operating system options.
+This Terraform module enables the deployment of virtual machines in VMware vSphere environments with advanced features for datastore selection, network configuration, and Infoblox IPAM integration for IP address allocation and DNS management.
 
 ## Features
 
-- **Cluster-based tenancy**: Each tenant has their own dedicated vSphere cluster
-- **Smart resource selection**: Auto-selects datastores with most free space within the tenant's cluster
-- **Multiple OS options**: Deploy RHEL, Ubuntu, or Windows with a simple parameter
-- **Customizable VM specifications**: Configure CPU, memory, disk size, and more
-- **Template-based deployment**: Clone from templates with proper customization options
-- **Scalable**: Deploy single or multiple VMs with consistent naming
-
-## Usage
-
-```hcl
-module "tenant_vms" {
-  source = "./modules/vsphere-vm"
-  
-  # vSphere connection details
-  vsphere_server   = "vcenter.example.com"
-  vsphere_username = var.vsphere_user
-  vsphere_password = var.vsphere_password
-  
-  # Deployment configuration 
-  datacenter     = "Main-DC"
-  tenant_cluster = "tenantA-cluster"  # The cluster is tenant-specific
-  
-  # VM details
-  vm_name_prefix   = "webapp"
-  vm_count         = 2
-  operating_system = "rhel8"   # Choose from rhel7, rhel8, rhel9, ubuntu18, ubuntu20, ubuntu22, windows2016, windows2019, windows2022
-  
-  # Hardware specifications
-  cpu            = 4
-  memory         = 8192
-  disk_size      = 100
-  
-  # Optional datastore selection
-  datastore_regex = "^ds-ssd-.*$"  # Optional: select SSD datastores
-  
-  # Optional network selection
-  network_name = "VM-Network-Prod"  # Optional: specify network
-  
-  # Optional settings for Windows VMs
-  admin_password = var.windows_password # Only needed for Windows VMs
-  
-  # Optional networking
-  ipv4_network_address = "192.168.10.0/24" # Optional static IP addressing
-  ipv4_gateway         = "192.168.10.1"
-  dns_servers          = ["8.8.8.8", "8.8.4.4"]
-}
-```
+- **Intelligent Resource Selection**: Automatically selects datastores with the most free space
+- **Multi-OS Support**: Handles customization for different operating systems (RHEL, Ubuntu, Windows)
+- **Advanced Storage Options**:
+  - Datastore filtering using regex patterns
+  - Datastore cluster support
+  - Multi-disk configuration
+- **Infoblox IPAM Integration**:
+  - Dynamic IP allocation from Infoblox networks
+  - Reserved IP support
+  - DNS record creation (A and PTR records)
+  - Extensible attributes support
+- **Enterprise-Grade Organization**:
+  - Resource pool placement
+  - VM folder organization
+  - Comprehensive tagging and annotations
 
 ## Prerequisites
 
-Before using this module, you need to set up the vSphere environment with:
+- Terraform v1.0+
+- vSphere environment with vCenter
+- vSphere provider v2.0+
+- Infoblox provider v2.0+
+- Infoblox Grid with API access
+- VM templates for supported operating systems
 
-1. **Cluster-Based Tenancy**: Each tenant should have their own dedicated vSphere cluster
-2. **Folder Structure**: Create `/Tenants/{tenant_name}` folders for VM organization (optional)
-3. **Template Preparation**: VM templates for each supported OS
+## Installation
 
-## Operating System Support
+1. Add the module to your Terraform configuration:
 
-The module supports the following operating systems:
+```hcl
+module "vsphere_vm" {
+  source = "path/to/vsphere-vm"
+  
+  # Required parameters
+  vsphere_server    = "vcenter.example.com"
+  datacenter_id     = "datacenter-name"
+  cluster_id        = "cluster-name"
+  template_id       = "template-name"
+  vm_name           = "new-vm-name"
+  os_family         = "linux"
+  network_id        = "network-name"
+  
+  # Optional parameters with defaults
+  num_cpus          = 2
+  memory_mb         = 4096
+  
+  # ... additional parameters as needed
+}
+```
 
-| Parameter | Description | Template Name |
-|-----------|-------------|---------------|
-| `rhel7` | Red Hat Enterprise Linux 7 | rhel7-template |
-| `rhel8` | Red Hat Enterprise Linux 8 | rhel8-template |
-| `rhel9` | Red Hat Enterprise Linux 9 | rhel9-template |
-| `ubuntu18` | Ubuntu 18.04 LTS | ubuntu18.04-template |
-| `ubuntu20` | Ubuntu 20.04 LTS | ubuntu20.04-template |
-| `ubuntu22` | Ubuntu 22.04 LTS | ubuntu22.04-template |
-| `windows2016` | Windows Server 2016 | windows2016-template |
-| `windows2019` | Windows Server 2019 | windows2019-template |
-| `windows2022` | Windows Server 2022 | windows2022-template |
+2. Initialize Terraform:
 
-You can customize the template names in the module's `os_templates` local variable if needed.
+```bash
+terraform init
+```
 
-## Resource Selection
+## Usage Examples
 
-The module selects resources as follows:
+### Basic Linux VM with DHCP
 
-1. **Cluster**: Uses the specified tenant cluster which serves as the tenant boundary
-2. **Datastore**: 
-   - If `datastore_regex` is provided, selects datastores matching that pattern
-   - Otherwise, selects the datastore with the most free space in the cluster
-3. **Network**:
-   - If `network_name` is provided, uses that specific network
-   - Otherwise, defaults to "VM Network"
-4. **Resource Pool**:
-   - If `resource_pool` is specified, uses that resource pool within the tenant cluster
-   - Otherwise, uses the cluster's root resource pool
-5. **Folder**:
-   - If `folder` is specified, uses that folder path
-   - Otherwise, places VMs in `/Tenants/{tenant_name}` folders
+```hcl
+module "linux_web_server" {
+  source = "./vsphere-vm"
+  
+  vsphere_server    = "vcenter.example.com"
+  datacenter_id     = "DC01"
+  cluster_id        = "Cluster01"
+  template_id       = "rhel8-template"
+  vm_name           = "web-server-01"
+  os_family         = "linux"
+  network_id        = "VM Network"
+  folder_path       = "Production/Web Servers"
+  
+  num_cpus          = 2
+  memory_mb         = 4096
+  
+  additional_disks  = [
+    {
+      label    = "data"
+      size_gb  = 100
+    }
+  ]
+}
+```
 
-## Guest Customization
+### Windows VM with Static IP
 
-The module handles guest customization differently for Linux and Windows VMs:
+```hcl
+module "windows_app_server" {
+  source = "./vsphere-vm"
+  
+  vsphere_server           = "vcenter.example.com"
+  datacenter_id            = "DC01"
+  cluster_id               = "Cluster01"
+  template_id              = "win2019-template"
+  vm_name                  = "app-server-01"
+  os_family                = "windows"
+  network_id               = "VM Network"
+  
+  num_cpus                 = 4
+  memory_mb                = 8192
+  
+  use_static_ip            = true
+  static_ip_address        = "10.0.0.100"
+  subnet_mask              = "24"
+  default_gateway          = "10.0.0.1"
+  dns_servers              = ["10.0.0.2", "10.0.0.3"]
+  dns_suffixes             = ["example.com"]
+  domain                   = "example.com"
+  
+  windows_admin_password   = var.admin_password
+  domain_admin_user        = "administrator"
+  domain_admin_password    = var.domain_admin_password
+  
+  additional_disks         = [
+    {
+      label    = "data"
+      size_gb  = 200
+      thin_provisioned = false
+    }
+  ]
+}
+```
 
-- **Linux VMs**: Sets hostname and domain
-- **Windows VMs**: Sets computer name, administrator password, and basic Windows settings
+### VM with Infoblox IPAM Integration
 
-For static IP addressing, provide the `ipv4_network_address` (CIDR notation) and `ipv4_gateway`.
+```hcl
+module "app_server_with_ipam" {
+  source = "./vsphere-vm"
+  
+  vsphere_server        = "vcenter.example.com"
+  datacenter_id         = "DC01"
+  cluster_id            = "Cluster01"
+  template_id           = "rhel8-template"
+  vm_name               = "app-server-02"
+  os_family             = "linux"
+  network_id            = "VM Network"
+  
+  num_cpus              = 4
+  memory_mb             = 8192
+  
+  # Infoblox IPAM integration
+  use_infoblox          = true
+  infoblox_grid_host    = "infoblox.example.com"
+  infoblox_username     = var.infoblox_username
+  infoblox_password     = var.infoblox_password
+  infoblox_network      = "10.0.0.0/24"
+  infoblox_network_view = "default"
+  create_dns_record     = true
+  
+  domain                = "example.com"
+  subnet_mask           = "24"
+  default_gateway       = "10.0.0.1"
+  dns_servers           = ["10.0.0.2", "10.0.0.3"]
+  
+  # Extensible attributes for Infoblox
+  infoblox_extensible_attributes = {
+    "Owner"     = "DevOps Team"
+    "Purpose"   = "Application Server"
+    "Tenant"    = "Finance Department"
+  }
+}
+```
 
-## Requirements
+### VM with Datastore Selection Logic
 
-- Terraform >= 0.14.0
-- vSphere provider >= 2.0.0
-- vSphere environment with clusters, resource pools, and templates
+```hcl
+module "storage_optimized_vm" {
+  source = "./vsphere-vm"
+  
+  vsphere_server        = "vcenter.example.com"
+  datacenter_id         = "DC01"
+  cluster_id            = "Cluster01"
+  template_id           = "rhel8-template"
+  vm_name               = "db-server-01"
+  os_family             = "linux"
+  network_id            = "VM Network"
+  
+  # Datastore selection
+  datastore_filter_regex = "SSD-[A-Z]+"  # Only use SSD datastores
+  
+  # Multi-disk configuration optimized for database
+  root_disk_size_gb     = 50
+  additional_disks      = [
+    {
+      label     = "data"
+      size_gb   = 500
+      thin_provisioned = false
+    },
+    {
+      label     = "logs"
+      size_gb   = 200
+      thin_provisioned = true
+    },
+    {
+      label     = "temp"
+      size_gb   = 100
+      thin_provisioned = true
+    }
+  ]
+}
+```
 
-## Input Variables
+## Resource Selection Logic
 
-| Name | Description | Type | Default | Required |
-|------|-------------|------|---------|----------|
-| vsphere_server | vSphere server address | string | - | yes |
-| vsphere_username | vSphere username | string | - | yes |
-| vsphere_password | vSphere password | string | - | yes |
-| datacenter | vSphere datacenter name | string | - | yes |
-| tenant_cluster | vSphere cluster for tenant | string | - | yes |
-| vm_name_prefix | Prefix for VM names | string | - | yes |
-| vm_count | Number of VMs to create | number | 1 | no |
-| operating_system | OS to deploy (see supported list) | string | "rhel8" | no |
-| folder | VM folder | string | "/Tenants/{tenant_name}" | no |
-| cpu | Number of vCPUs | number | 2 | no |
-| memory | Memory in MB | number | 4096 | no |
-| disk_size | Disk size in GB | number | 40 | no |
-| datastore_regex | Pattern to select datastores | string | "" | no |
-| network_name | Network to use | string | "VM Network" | no |
-| ipv4_network_address | CIDR for static IPs | string | "" | no |
-| ipv4_gateway | Default gateway | string | "" | no |
-| dns_servers | List of DNS servers | list(string) | [] | no |
-| admin_password | Windows admin password | string | "" | no |
-| enable_disk_uuid | Enable disk UUID (for K8s) | bool | false | no |
-| resource_pool | Resource pool within cluster | string | "" | no |
+### Datastore Selection
 
-## Outputs
+The module implements intelligent datastore selection using the following logic:
 
-| Name | Description |
-|------|-------------|
-| vm_ids | IDs of created VMs |
-| vm_names | Names of created VMs |
-| vm_ips | IP addresses of created VMs |
-| tenant_cluster | Tenant cluster used for deployment |
-| datastore | Datastore used |
-| network | Network used |
-| operating_system | OS deployed |
+1. If `datastore_id` is specified, it is used directly
+2. If `datastore_cluster_id` is specified, it is used and the vSphere DRS will handle disk placement
+3. Otherwise, available datastores are filtered using `datastore_filter_regex` and sorted by free space
+4. The datastore with the most free space is selected automatically
 
-## Cluster-Based Tenancy vs Tag-Based Tenancy
+### Network Configuration
 
-This module uses **cluster-based tenancy** which offers several advantages over tag-based approaches:
+IP configuration can be handled in several ways:
 
-1. **Natural vSphere Organization**: Aligns with vSphere's organizational structure
-2. **Simpler Resource Isolation**: Physical and logical separation at the cluster level
-3. **Performance Isolation**: Dedicated resources per tenant
-4. **Simplified Permission Model**: Permissions can be set at the cluster level
-5. **Easier Capacity Planning**: Each tenant has their own resource pool
+1. DHCP (default) - No static IP configuration needed
+2. Static IP - Specify `use_static_ip = true` and provide IP details
+3. Infoblox IPAM:
+   - Dynamic allocation - Enable Infoblox and specify the network
+   - Reserved IP - Enable Infoblox and specify a specific IP to reserve
 
-## Notes
+## Infoblox IPAM Integration
 
-- The module extracts the tenant name from the cluster name for folder organization
-- For Windows VMs, you must provide the `admin_password` variable
-- If static IP addressing is desired, provide the `ipv4_network_address` in CIDR notation (e.g., "192.168.1.0/24")
-- The module will assign IPs sequentially starting from .10 in that subnet
+The module integrates with Infoblox for IP address management (IPAM) and DNS services:
+
+### Features
+
+- **Dynamic IP Allocation**: Automatically allocate the next available IP from a network
+- **IP Reservation**: Reserve specific IPs when needed
+- **DNS Records**: Create A and PTR records automatically
+- **Extensible Attributes**: Add custom metadata to Infoblox records
+- **IP Release**: Automatically release IPs when VMs are destroyed
+
+### Configuration
+
+1. Enable Infoblox integration:
+
+```hcl
+use_infoblox          = true
+infoblox_grid_host    = "infoblox.example.com"
+infoblox_username     = "apiuser"
+infoblox_password     = "apipassword"
+infoblox_network      = "10.0.0.0/24"
+infoblox_network_view = "default"
+```
+
+2. For dynamic allocation, no additional configuration is needed
+
+3. For reserved IPs:
+
+```hcl
+infoblox_reserve_ip   = true
+infoblox_reserved_ip  = "10.0.0.50"
+```
+
+### IP Release Process
+
+When a VM is destroyed:
+
+1. The module identifies the allocated IP address
+2. The IP is released from Infoblox using the `release_infoblox_ip.sh` script
+3. Associated DNS records (A and PTR) are removed
+
+## Operating System Customization
+
+The module handles OS-specific customization based on the `os_family` parameter:
+
+### Linux Customization
+
+- Hostname and domain configuration
+- Network settings (IP, gateway, DNS)
+- No additional customization to maintain simplicity
+
+### Windows Customization
+
+- Computer name and domain/workgroup configuration
+- Administrator password and auto-logon options
+- Network settings (IP, gateway, DNS)
+- Time zone and organization details
+- Product key application if provided
+- First boot commands via `windows_run_once_command_list`
+
+## Required Permissions
+
+### vSphere Permissions
+
+- Virtual machine.Inventory.Create
+- Virtual machine.Configuration.AddNewDisk
+- Virtual machine.Configuration.AddExistingDisk
+- Virtual machine.Configuration.AddRemoveDevice
+- Virtual machine.Configuration.AdvancedConfig
+- Virtual machine.Configuration.Annotation
+- Virtual machine.Configuration.CPUCount
+- Virtual machine.Configuration.Memory
+- Virtual machine.Configuration.Settings
+- Virtual machine.Provisioning.DeployTemplate
+- Virtual machine.Provisioning.Customize
+- Resource.AssignVMToPool
+- Datastore.AllocateSpace
+- Network.Assign
+
+### Infoblox Permissions
+
+The Infoblox API user requires the following permissions:
+
+- IP address management (read and write)
+- DNS record management (read and write)
+- Network and network view access
+- Extensible attributes access
+
+## Module Maintenance
+
+### Version Compatibility
+
+| Module Version | vSphere Provider | Infoblox Provider | Terraform  |
+|----------------|------------------|-------------------|------------|
+| v1.0.0         | >= 2.0.0         | >= 2.0.0          | >= 1.0.0   |
+
+### Troubleshooting
+
+- **IP Allocation Failed**: Check Infoblox network availability and permissions
+- **Datastore Selection Failed**: Verify datastore filter regex and available space
+- **Customization Failed**: Ensure template is properly prepared for customization
+- **DNS Record Creation Failed**: Verify DNS view permissions in Infoblox
+
+## Contributing
+
+Contributions to improve the module are welcome. Please follow these guidelines:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/new-feature`)
+3. Commit your changes (`git commit -am 'Add new feature'`)
+4. Push to the branch (`git push origin feature/new-feature`)
+5. Create a new Pull Request
+
+## License
+
+MIT
+
+## Authors
+
+DevOps Team

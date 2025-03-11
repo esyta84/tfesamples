@@ -1,0 +1,446 @@
+trigger:
+  branches:
+    include:
+      - main
+      - release/*
+  tags:
+    include:
+      - v*
+
+# Pipeline won't run for these paths
+pr:
+  branches:
+    include:
+      - main
+      - release/*
+  paths:
+    exclude:
+      - README.md
+      - docs/*
+
+pool:
+  name: 'Enterprise-Linux-Pool' # Your internal RHEL 9 agent pool name
+  demands:
+    - Agent.OS -equals Linux
+    - Agent.OSVersion -startsWith 9 # Ensures RHEL 9
+
+variables:
+  - name: moduleNamespace
+    value: 'infrastructure'
+  - name: moduleName
+    value: 'vsphere-vm'
+  - group: terraform-registry-credentials
+  - group: artifactory-credentials  # Added group for Artifactory credentials
+  - name: isProdBuild
+    value: $[eq(variables['Build.SourceBranch'], 'refs/heads/main')]
+  # Internal repository configurations
+  - name: internalArtifactoryUrl
+    value: 'https://artifactory.internal.example.com/artifactory'
+
+stages:
+  - stage: Validate
+    displayName: 'Validate Module'
+    jobs:
+      - job: Validate
+        displayName: 'Validate Module'
+        steps:
+          - task: Bash@3
+            displayName: 'Check and Install Terraform if needed'
+            inputs:
+              targetType: 'inline'
+              script: |
+                # Check if Terraform is already installed
+                if command -v terraform &> /dev/null && terraform version | grep -q "v1.5"; then
+                  echo "Terraform 1.5.x is already installed:"
+                  terraform version
+                else
+                  echo "Installing Terraform from internal Artifactory..."
+                  
+                  # Use internal Artifactory repository for Terraform installation
+                  ARTIFACTORY_URL="https://artifactory.internal.example.com/artifactory"
+                  TERRAFORM_VERSION="1.5.7"
+                  TERRAFORM_RPM="terraform-${TERRAFORM_VERSION}-1.x86_64.rpm"
+                  
+                  # Download the RPM from internal Artifactory
+                  curl -s -u ${ARTIFACTORY_USERNAME}:${ARTIFACTORY_PASSWORD} \
+                    -o /tmp/${TERRAFORM_RPM} \
+                    ${ARTIFACTORY_URL}/terraform-rpms/${TERRAFORM_RPM}
+                  
+                  # Install the RPM
+                  sudo rpm -i /tmp/${TERRAFORM_RPM}
+                  
+                  # Verify installation
+                  terraform version
+                fi
+              failOnStderr: true
+            env:
+              ARTIFACTORY_USERNAME: $(artifactoryUsername)
+              ARTIFACTORY_PASSWORD: $(artifactoryPassword)
+
+          - script: |
+              terraform init -backend=false
+              terraform validate
+            displayName: 'Terraform Validate'
+            workingDirectory: '$(System.DefaultWorkingDirectory)'
+
+          - task: Bash@3
+            displayName: 'Check and Install TFLint if needed'
+            inputs:
+              targetType: 'inline'
+              script: |
+                # Check if TFLint is already installed
+                if command -v tflint &> /dev/null; then
+                  echo "TFLint is already installed:"
+                  tflint --version
+                else
+                  echo "Installing TFLint from internal Artifactory..."
+                  
+                  # Use internal Artifactory repository for tflint
+                  ARTIFACTORY_URL="https://artifactory.internal.example.com/artifactory"
+                  TFLINT_VERSION="0.44.1"
+                  TFLINT_PACKAGE="tflint_linux_amd64.zip"
+                  
+                  # Download tflint from internal Artifactory
+                  curl -s -u ${ARTIFACTORY_USERNAME}:${ARTIFACTORY_PASSWORD} \
+                    -o /tmp/${TFLINT_PACKAGE} \
+                    ${ARTIFACTORY_URL}/terraform-tools/tflint/${TFLINT_VERSION}/${TFLINT_PACKAGE}
+                  
+                  # Extract and install
+                  unzip -o /tmp/${TFLINT_PACKAGE} -d /tmp
+                  sudo mv /tmp/tflint /usr/local/bin/
+                  sudo chmod +x /usr/local/bin/tflint
+                  
+                  # Verify installation
+                  tflint --version
+                fi
+                
+                # Run tflint regardless of installation source
+                tflint --recursive --format compact
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              failOnStderr: true
+            env:
+              ARTIFACTORY_USERNAME: $(artifactoryUsername)
+              ARTIFACTORY_PASSWORD: $(artifactoryPassword)
+
+          - task: Bash@3
+            displayName: 'Check formatting'
+            inputs:
+              targetType: 'inline'
+              script: |
+                terraform fmt -check -recursive
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+
+  - stage: RunTests
+    displayName: 'Run Test Suites'
+    dependsOn: Validate
+    jobs:
+      - job: UnitTests
+        displayName: 'Run Unit Tests'
+        steps:
+          - task: Bash@3
+            displayName: 'Check and Install Terraform if needed'
+            inputs:
+              targetType: 'inline'
+              script: |
+                # Check if Terraform is already installed
+                if command -v terraform &> /dev/null && terraform version | grep -q "v1.5"; then
+                  echo "Terraform 1.5.x is already installed:"
+                  terraform version
+                else
+                  echo "Installing Terraform from internal Artifactory..."
+                  
+                  # Use internal Artifactory repository for Terraform installation
+                  ARTIFACTORY_URL="https://artifactory.internal.example.com/artifactory"
+                  TERRAFORM_VERSION="1.5.7"
+                  TERRAFORM_RPM="terraform-${TERRAFORM_VERSION}-1.x86_64.rpm"
+                  
+                  # Download the RPM from internal Artifactory
+                  curl -s -u ${ARTIFACTORY_USERNAME}:${ARTIFACTORY_PASSWORD} \
+                    -o /tmp/${TERRAFORM_RPM} \
+                    ${ARTIFACTORY_URL}/terraform-rpms/${TERRAFORM_RPM}
+                  
+                  # Install the RPM
+                  sudo rpm -i /tmp/${TERRAFORM_RPM}
+                  
+                  # Verify installation
+                  terraform version
+                fi
+              failOnStderr: true
+            env:
+              ARTIFACTORY_USERNAME: $(artifactoryUsername)
+              ARTIFACTORY_PASSWORD: $(artifactoryPassword)
+
+          - task: Bash@3
+            displayName: 'Check and Install Go if needed'
+            inputs:
+              targetType: 'inline'
+              script: |
+                # Check if Go is already installed
+                if command -v go &> /dev/null; then
+                  echo "Go is already installed:"
+                  go version
+                else
+                  echo "Installing Go from RHEL repositories..."
+                  
+                  # Install Go from RHEL repositories or internal Artifactory
+                  sudo dnf config-manager --add-repo=http://repo.internal.example.com/rhel9/appstream
+                  sudo dnf install -y golang
+                  
+                  # Verify installation
+                  go version
+                fi
+                
+                # Set Go environment variables regardless of installation source
+                export PATH=$PATH:/usr/local/go/bin
+                export GOPATH=$HOME/go
+                export PATH=$PATH:$GOPATH/bin
+                
+                # Configure Go to use internal Artifactory for modules
+                # This ensures Go doesn't reach out to the public internet
+                go env -w GOPROXY=https://artifactory.internal.example.com/artifactory/api/go/go-proxy
+                go env -w GOSUMDB=off
+                
+                # Run tests if test directory exists
+                if [ -d "$(System.DefaultWorkingDirectory)/tests" ]; then
+                  cd $(System.DefaultWorkingDirectory)/tests
+                  go test -v ./...
+                else
+                  echo "No tests directory found. Skipping tests."
+                fi
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              failOnStderr: false # Some Go warnings are expected
+
+  - stage: Package
+    displayName: 'Package Module'
+    dependsOn: RunTests
+    jobs:
+      - job: PackageModule
+        displayName: 'Package Module'
+        steps:
+          - task: Bash@3
+            displayName: 'Determine Module Version'
+            inputs:
+              targetType: 'inline'
+              script: |
+                # Check if this is a tag-based build
+                if [[ "$(Build.SourceBranch)" == refs/tags/v* ]]; then
+                  # Extract version from tag (remove 'v' prefix)
+                  VERSION=$(echo $(Build.SourceBranchName) | sed 's/^v//')
+                else
+                  # Generate version based on semantic versioning + build number
+                  BASE_VERSION=$(grep -m 1 'version' version.tf | sed 's/.*version *= *"\(.*\)".*/\1/')
+                  if [ -z "$BASE_VERSION" ]; then
+                    BASE_VERSION="0.1.0"
+                  fi
+                  
+                  # For development builds, append build number
+                  if [[ "$(isProdBuild)" == "False" ]]; then
+                    VERSION="${BASE_VERSION}-dev.$(Build.BuildNumber)"
+                  else
+                    VERSION="${BASE_VERSION}"
+                  fi
+                fi
+                
+                echo "##vso[task.setvariable variable=moduleVersion]$VERSION"
+                echo "Module Version: $VERSION"
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+          
+          - task: Bash@3
+            displayName: 'Create Module Archive'
+            inputs:
+              targetType: 'inline'
+              script: |
+                MODULE_VERSION=$(moduleVersion)
+                MODULE_PATH="$(moduleNamespace)/$(moduleName)/${MODULE_VERSION}"
+                
+                # Create a temporary directory for packaging
+                mkdir -p package/${MODULE_PATH}
+                
+                # Copy module files to package directory, excluding unnecessary files
+                rsync -av --exclude='.git*' --exclude='tests' --exclude='package' \
+                      --exclude='.tflint.hcl' --exclude='azure-pipelines.yml' \
+                      --exclude='.terraform' --exclude='.terraform.lock.hcl' \
+                      --exclude='.idea' --exclude='.vscode' \
+                      ./ package/${MODULE_PATH}/
+                
+                # Create the archive
+                cd package
+                zip -r "$(moduleName)-${MODULE_VERSION}.zip" .
+                
+                echo "##vso[task.setvariable variable=moduleArchivePath]$(pwd)/$(moduleName)-${MODULE_VERSION}.zip"
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+
+          - task: CopyFiles@2
+            displayName: 'Copy Files to Staging Directory'
+            inputs:
+              SourceFolder: '$(System.DefaultWorkingDirectory)/package'
+              Contents: '*.zip'
+              TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish Build Artifacts'
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+              ArtifactName: 'terraform-module'
+              publishLocation: 'Container'
+
+  - stage: PublishToRegistry
+    displayName: 'Publish to Terraform Enterprise Registry'
+    dependsOn: Package
+    condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/tags/v')))
+    jobs:
+      - deployment: PublishModule
+        displayName: 'Publish Module'
+        environment: 'terraform-registry'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: terraform-module
+                
+                - task: Bash@3
+                  displayName: 'Upload to Terraform Enterprise Registry'
+                  inputs:
+                    targetType: 'inline'
+                    script: |
+                      # Get module version and archive path
+                      MODULE_VERSION=$(moduleVersion)
+                      MODULE_ARCHIVE=$(find $(Pipeline.Workspace)/terraform-module -name "*.zip" -type f)
+                      
+                      echo "Publishing module version ${MODULE_VERSION} to Terraform Enterprise Registry"
+                      
+                      # Generate TFE API token (using saved credentials)
+                      RESPONSE=$(curl -s \
+                        --header "Content-Type: application/vnd.api+json" \
+                        --request POST \
+                        --data "{\"data\": {\"type\": \"authentication-tokens\", \"attributes\": {\"description\": \"Azure DevOps Pipeline\"}}}" \
+                        --user $(TFE_USERNAME):$(TFE_PASSWORD) \
+                        $(TFE_HOST)/api/v2/authentication-tokens)
+                      
+                      # Extract the token
+                      TFE_TOKEN=$(echo $RESPONSE | jq -r '.data.attributes.token')
+                      
+                      if [ -z "$TFE_TOKEN" ] || [ "$TFE_TOKEN" == "null" ]; then
+                        echo "Failed to obtain API token. Response: $RESPONSE"
+                        exit 1
+                      fi
+                      
+                      # Create a version in the registry
+                      VERSION_RESPONSE=$(curl -s \
+                        --header "Authorization: Bearer $TFE_TOKEN" \
+                        --header "Content-Type: application/vnd.api+json" \
+                        --request POST \
+                        --data "{\"data\": {\"type\": \"registry-module-versions\", \"attributes\": {\"version\": \"${MODULE_VERSION}\"}}}" \
+                        $(TFE_HOST)/api/v2/organizations/$(TFE_ORG)/registry-modules/private/$(moduleNamespace)/$(moduleName)/versions)
+                      
+                      # Extract the upload URL
+                      UPLOAD_URL=$(echo $VERSION_RESPONSE | jq -r '.data.links."upload-url"')
+                      
+                      if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" == "null" ]; then
+                        echo "Failed to get upload URL. Response: $VERSION_RESPONSE"
+                        exit 1
+                      fi
+                      
+                      # Upload the module archive
+                      curl -s \
+                        --header "Authorization: Bearer $TFE_TOKEN" \
+                        --header "Content-Type: application/octet-stream" \
+                        --request PUT \
+                        --data-binary @"$MODULE_ARCHIVE" \
+                        "$UPLOAD_URL"
+                      
+                      echo "Module successfully published to Terraform Enterprise Registry"
+                      
+                      # Revoke the temporary token
+                      curl -s \
+                        --header "Authorization: Bearer $TFE_TOKEN" \
+                        --header "Content-Type: application/vnd.api+json" \
+                        --request DELETE \
+                        $(TFE_HOST)/api/v2/authentication-tokens/self
+                    failOnStderr: true
+
+  - stage: Documentation
+    displayName: 'Update Documentation'
+    dependsOn: PublishToRegistry
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: UpdateDocs
+        displayName: 'Update Documentation'
+        steps:
+          - task: Bash@3
+            displayName: 'Check and Install terraform-docs if needed'
+            inputs:
+              targetType: 'inline'
+              script: |
+                # Check if terraform-docs is already installed
+                if command -v terraform-docs &> /dev/null; then
+                  echo "terraform-docs is already installed:"
+                  terraform-docs --version
+                else
+                  echo "Installing terraform-docs from internal Artifactory..."
+                  
+                  # Install terraform-docs from internal Artifactory
+                  ARTIFACTORY_URL="https://artifactory.internal.example.com/artifactory"
+                  TERRAFORM_DOCS_VERSION="0.16.0"
+                  TERRAFORM_DOCS_PACKAGE="terraform-docs-v${TERRAFORM_DOCS_VERSION}-linux-amd64.tar.gz"
+                  
+                  # Download from internal Artifactory
+                  curl -s -u ${ARTIFACTORY_USERNAME}:${ARTIFACTORY_PASSWORD} \
+                    -o /tmp/${TERRAFORM_DOCS_PACKAGE} \
+                    ${ARTIFACTORY_URL}/terraform-tools/terraform-docs/${TERRAFORM_DOCS_VERSION}/${TERRAFORM_DOCS_PACKAGE}
+                  
+                  # Extract and install
+                  tar -xzf /tmp/${TERRAFORM_DOCS_PACKAGE} -C /tmp
+                  sudo mv /tmp/terraform-docs /usr/local/bin/
+                  sudo chmod +x /usr/local/bin/terraform-docs
+                  
+                  # Verify installation
+                  terraform-docs --version
+                fi
+                
+                # Generate documentation regardless of installation source
+                terraform-docs markdown table --output-file DOCUMENTATION.md .
+                
+                # Update README if it contains markers
+                if grep -q "<!-- BEGIN_TF_DOCS -->" README.md; then
+                  terraform-docs markdown table --output-mode inject README.md
+                  echo "README.md documentation updated"
+                else
+                  echo "README.md doesn't contain documentation markers. Created separate DOCUMENTATION.md file."
+                fi
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              failOnStderr: true
+            env:
+              ARTIFACTORY_USERNAME: $(artifactoryUsername)
+              ARTIFACTORY_PASSWORD: $(artifactoryPassword)
+
+          - task: Bash@3
+            displayName: 'Commit Updated Documentation'
+            condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+            inputs:
+              targetType: 'inline'
+              script: |
+                # Setup git with PAT
+                git config --global user.email "azure-devops@example.com"
+                git config --global user.name "Azure DevOps"
+                
+                # Check if there are any changes to commit
+                if git status --porcelain | grep -q "DOCUMENTATION.md\|README.md"; then
+                  echo "Documentation changes detected, committing updates"
+                  
+                  # Setup credentials using PAT
+                  git remote set-url origin https://$(SYSTEM_ACCESSTOKEN)@dev.azure.com/$(System.TeamProject)/_git/$(Build.Repository.Name)
+                  
+                  # Commit and push changes
+                  git add DOCUMENTATION.md README.md
+                  git commit -m "Update module documentation [skip ci]"
+                  git push origin HEAD:main
+                  
+                  echo "Documentation updates committed and pushed"
+                else
+                  echo "No documentation changes detected"
+                fi
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
